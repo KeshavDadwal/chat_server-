@@ -43,69 +43,6 @@ func (s *server) start() {
 	log.Println("Server started and ready to accept clients.")
 }
 
-// func (s *server) serveSSE(w http.ResponseWriter, r *http.Request) {
-// 	flusher, ok := w.(http.Flusher)
-// 	if !ok {
-// 		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
-// 		return
-// 	}
-
-// 	// Create a new client with a unique ID
-// 	id := uuid.New().String()
-// 	client := &client{
-// 		id: id,
-// 		ch: make(chan string),
-// 	}
-
-// 	// Add client to the server
-// 	s.mu.Lock()
-// 	s.clients[id] = client
-// 	s.mu.Unlock()
-
-// 	defer func() {
-// 		s.mu.Lock()
-// 		delete(s.clients, client.id)
-// 		s.mu.Unlock()
-// 	}()
-
-// 	w.Header().Set("Content-Type", "text/event-stream")
-// 	w.Header().Set("Cache-Control", "no-cache")
-// 	w.Header().Set("Connection", "keep-alive")
-
-// 	// Get the room ID from query parameters
-// 	roomID := r.URL.Query().Get("roomID")
-// 	client.roomID = roomID // Set the room ID in the client
-
-// 	// Send user ID and room ID to the client (initial connection)
-// 	fmt.Fprintf(w, "data33: {\"id\": \"%s\", \"roomID\": \"%s\"}\n\n", id, roomID)
-// 	flusher.Flush()
-
-// 	// Fetch and send existing messages for the room
-// 	s.mu.Lock()
-// 	room, exists := s.rooms[roomID]
-// 	s.mu.Unlock()
-
-// 	if exists {
-// 		for _, message := range room.messages {
-// 			fmt.Fprintf(w, "data22: %s\n\n", message)
-// 			flusher.Flush()
-// 		}
-// 	}
-
-// 	for {
-// 		select {
-// 		case message, ok := <-client.ch:
-// 			if !ok {
-// 				return
-// 			}
-// 			fmt.Fprintf(w, "data11: %s\n\n", message)
-// 			flusher.Flush()
-// 		case <-r.Context().Done():
-// 			return
-// 		}
-// 	}
-// }
-
 func (s *server) serveSSE(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -139,30 +76,29 @@ func (s *server) serveSSE(w http.ResponseWriter, r *http.Request) {
 	roomID := r.URL.Query().Get("roomID")
 	client.roomID = roomID // Set the room ID in the client
 
-	// Fetch the room and its clients
+	// Send user ID and room ID to the client (initial connection)
+	fmt.Fprintf(w, "data33: {\"id\": \"%s\", \"roomID\": \"%s\"}\n\n", id, roomID)
+	flusher.Flush()
+
+	// Fetch and send existing messages for the room
 	s.mu.Lock()
 	room, exists := s.rooms[roomID]
 	s.mu.Unlock()
 
-	if !exists {
-		http.Error(w, "Room not found", http.StatusNotFound)
-		return
+	if exists {
+		for _, message := range room.messages {
+			fmt.Fprintf(w, "data22: %s\n\n", message)
+			flusher.Flush()
+		}
 	}
 
-	// Send existing messages for the room with usernames
-	for _, message := range room.messages {
-		fmt.Fprintf(w, "data: %s\n\n", message)
-		flusher.Flush()
-	}
-
-	// Listen for new messages sent to this client's channel
 	for {
 		select {
 		case message, ok := <-client.ch:
 			if !ok {
 				return
 			}
-			fmt.Fprintf(w, "data: %s\n\n", message)
+			fmt.Fprintf(w, "data11: %s\n\n", message)
 			flusher.Flush()
 		case <-r.Context().Done():
 			return
