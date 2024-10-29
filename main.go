@@ -25,17 +25,19 @@ type room struct {
 }
 
 type server struct {
-	clients       map[string]*client // maps clientID to client
-	rooms         map[string]*room   // maps roomID to room
-	clientsByName map[string]*client // maps clientName to client
-	mu            sync.Mutex
+	clients         map[string]*client // maps clientID to client
+	rooms           map[string]*room   // maps roomID to room
+	clientsByName   map[string]*client // maps clientName to client
+	privateMessages map[string][]string
+	mu              sync.Mutex
 }
 
 func newServer() *server {
 	return &server{
-		clients:       make(map[string]*client),
-		rooms:         make(map[string]*room),
-		clientsByName: make(map[string]*client),
+		clients:         make(map[string]*client),
+		rooms:           make(map[string]*room),
+		clientsByName:   make(map[string]*client),
+		privateMessages: make(map[string][]string),
 	}
 }
 
@@ -338,6 +340,104 @@ func (s *server) listUsers(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(users)
 }
 
+func (s *server) sendPrivateMessage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Decode the JSON request for private message details
+	var msg struct {
+		FromUserID string `json:"fromUserID"`
+		ToUserID   string `json:"toUserID"`
+		Content    string `json:"message"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&msg); err != nil {
+		log.Printf("Error decoding request body: %v", err)
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	// Ensure both sender and recipient IDs are provided
+	if msg.FromUserID == "" || msg.ToUserID == "" {
+		log.Println("Both FromUserID and ToUserID are required")
+		http.Error(w, "FromUserID and ToUserID are required", http.StatusBadRequest)
+		return
+	}
+
+	// Lock the server's client map to find the target client
+	s.mu.Lock()
+	toClient, exists := s.clients[msg.ToUserID]
+	s.mu.Unlock()
+
+	if !exists {
+		log.Printf("User %s not found", msg.ToUserID)
+		http.Error(w, "Recipient user not found", http.StatusNotFound)
+		return
+	}
+
+	// Format the message with the sender ID
+	privateMessage := fmt.Sprintf("Private message from %s: %s", msg.FromUserID, msg.Content)
+
+	// Send the private message to the recipient's channel
+	select {
+	case toClient.ch <- privateMessage:
+		log.Printf("Private message sent from %s to %s", msg.FromUserID, msg.ToUserID)
+	default:
+		log.Printf("Client %s's channel is full; message could not be sent", msg.ToUserID)
+	}
+
+	// Store the message in the privateMessages map
+	key := fmt.Sprintf("%s:%s", msg.FromUserID, msg.ToUserID)
+	if msg.FromUserID > msg.ToUserID {
+		key = fmt.Sprintf("%s:%s", msg.ToUserID, msg.FromUserID)
+	}
+
+	s.mu.Lock()
+	s.privateMessages[key] = append(s.privateMessages[key], privateMessage)
+	s.mu.Unlock()
+
+	// Respond with a success message
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(map[string]string{"status": "Private message sent successfully"}); err != nil {
+		log.Printf("Error encoding response: %v", err)
+	}
+}
+
+func (s *server) getPrivateMessages(w http.ResponseWriter, r *http.Request) {
+	// Parse query parameters for UserID1 and UserID2
+	userID1 := r.URL.Query().Get("userID1")
+	userID2 := r.URL.Query().Get("userID2")
+
+	if userID1 == "" || userID2 == "" {
+		http.Error(w, "Both userID1 and userID2 are required", http.StatusBadRequest)
+		return
+	}
+
+	// Ensure consistent key ordering
+	key := fmt.Sprintf("%s:%s", userID1, userID2)
+	if userID1 > userID2 {
+		key = fmt.Sprintf("%s:%s", userID2, userID1)
+	}
+
+	// Retrieve messages
+	s.mu.Lock()
+	messages, exists := s.privateMessages[key]
+	s.mu.Unlock()
+
+	if !exists {
+		messages = []string{}
+	}
+
+	// Respond with messages
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{
+		"messages": messages,
+	}); err != nil {
+		log.Printf("Error encoding response: %v", err)
+	}
+}
+
 func main() {
 	srv := newServer()
 	srv.start()
@@ -349,6 +449,8 @@ func main() {
 	http.HandleFunc("/join-room", srv.joinRoom)
 	http.HandleFunc("/send", srv.sendMessage)
 	http.HandleFunc("/list-users", srv.listUsers)
+	http.HandleFunc("/send-private", srv.sendPrivateMessage)
+	http.HandleFunc("/get-private", srv.getPrivateMessages)
 
 	log.Println("Starting server on :8080...")
 	if err := http.ListenAndServe(":8080", nil); err != nil {
