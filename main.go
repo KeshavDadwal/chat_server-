@@ -438,19 +438,37 @@ func (s *server) getPrivateMessages(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func enableCORS(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")                   // Allow all origins
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS") // Allowed methods
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")       // Allowed headers
+
+	// Handle preflight requests
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent) // Respond with 204 No Content
+		return
+	}
+}
+
+func corsHandler(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		enableCORS(w, r) // Add CORS headers
+		next(w, r)       // Call the original handler
+	}
+}
+
 func main() {
 	srv := newServer()
-	srv.start()
 
-	http.HandleFunc("/events", srv.serveSSE)
-	http.HandleFunc("/rooms", srv.listRooms)
-	http.HandleFunc("/create-room", srv.createRoom)
-	http.HandleFunc("/create-user", srv.createUser)
-	http.HandleFunc("/join-room", srv.joinRoom)
-	http.HandleFunc("/send", srv.sendMessage)
-	http.HandleFunc("/list-users", srv.listUsers)
-	http.HandleFunc("/send-private", srv.sendPrivateMessage)
-	http.HandleFunc("/get-private", srv.getPrivateMessages)
+	http.HandleFunc("/events", corsHandler(srv.serveSSE))
+	http.HandleFunc("/rooms", corsHandler(srv.listRooms))
+	http.HandleFunc("/create-room", corsHandler(srv.createRoom))
+	http.HandleFunc("/create-user", corsHandler(srv.createUser))
+	http.HandleFunc("/join-room", corsHandler(srv.joinRoom))
+	http.HandleFunc("/send", corsHandler(srv.sendMessage))
+	http.HandleFunc("/list-users", corsHandler(srv.listUsers))
+	http.HandleFunc("/send-private", corsHandler(srv.sendPrivateMessage))
+	http.HandleFunc("/get-private", corsHandler(srv.getPrivateMessages))
 
 	log.Println("Starting server on :8080...")
 	if err := http.ListenAndServe(":8080", nil); err != nil {
